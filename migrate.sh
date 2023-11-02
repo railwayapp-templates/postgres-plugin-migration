@@ -70,9 +70,7 @@ query="SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN 
 table_count=$(psql "$NEW_URL" -t -A -c "$query")
 
 if [[ $table_count -eq 0 ]]; then
-  if [ -z "$OVERWRITE_DATABASE" ]; then
-    write_ok "The new database is empty. Proceeding with restore."
-  fi
+  write_ok "The new database is empty. Proceeding with restore."
 else
   if [ -z "$OVERWRITE_DATABASE" ]; then
     error_exit "The new database is not empty. Aborting migration.\nSet the OVERWRITE_DATABASE environment variable to overwrite the new database."
