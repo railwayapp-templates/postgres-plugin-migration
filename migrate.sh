@@ -2,6 +2,8 @@
 
 set -o pipefail
 
+sleep 2
+
 export TERM=ansi
 _GREEN=$(tput setaf 2)
 _BLUE=$(tput setaf 4)
