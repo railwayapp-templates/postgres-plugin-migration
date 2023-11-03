@@ -2,7 +2,7 @@
 
 set -o pipefail
 
-sleep 2
+sleep 5
 
 export TERM=ansi
 _GREEN=$(tput setaf 2)
