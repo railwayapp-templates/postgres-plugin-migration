@@ -66,12 +66,25 @@ write_ok "NEW_URL correctly set"
 section "Checking if NEW_URL is empty"
 
 # Query to check if there are any tables in the new database
-query="SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog');"
+# We filter out any tables that are created by extensions
+query="SELECT count(*)
+FROM information_schema.tables t
+WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_depend d
+    JOIN pg_extension e ON d.refobjid = e.oid
+    JOIN pg_class c ON d.objid = c.oid
+    WHERE c.relname = t.table_name
+      AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
+  );"
 table_count=$(psql "$NEW_URL" -t -A -c "$query")
+
 
 if [[ $table_count -eq 0 ]]; then
   write_ok "The new database is empty. Proceeding with restore."
 else
+  echo "table count: $table_count"
   if [ -z "$OVERWRITE_DATABASE" ]; then
     error_exit "The new database is not empty. Aborting migration.\nSet the OVERWRITE_DATABASE environment variable to overwrite the new database."
   fi
