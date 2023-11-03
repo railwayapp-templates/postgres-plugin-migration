@@ -95,7 +95,14 @@ section "Dumping database from PLUGIN_URL"
 
 # Run pg_dump on the plugin database
 dump_file="plugin_dump.sql"
-pg_dump -Fc "$PLUGIN_URL" > "$dump_file" || error_exit "Failed to dump database from $PLUGIN_URL."
+
+pg_dump -d "$PLUGIN_URL" \
+  --format=plain \
+  --quote-all-identifiers \
+  --no-tablespaces \
+  --no-owner \
+  --no-privileges \
+  --file=$dump_file || error_exit "Failed to dump database from PLUGIN_URL."
 
 write_ok "Successfully saved dump to $dump_file"
 
@@ -105,7 +112,8 @@ echo "Dump file size: $dump_file_size"
 section "Restoring database to NEW_URL"
 
 # Restore that data to the new database
-pg_restore -d "$NEW_URL" "$dump_file" || error_exit "Failed to restore database to $NEW_URL."
+psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
+    -f $dump_file || error_exit "Failed to restore database to $NEW_URL."
 
 write_ok "Successfully restored database to NEW_URL"
 
