@@ -112,7 +112,7 @@ echo "Dump file size: $dump_file_size"
 section "Restoring database to NEW_URL"
 
 # Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
-psql $DATABASE_URL -c "DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';"
+psql $NEW_URL -c "DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';"
 
 # Restore that data to the new database
 psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
