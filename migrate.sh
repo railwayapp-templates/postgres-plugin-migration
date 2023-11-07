@@ -130,23 +130,13 @@ if ! psql $NEW_URL -c '\dx' | grep -q 'timescaledb'; then
   write_warn "TimescaleDB extension not found in target database. Ignoring TimescaleDB specific commands."
   write_warn "If you are using TimescaleDB, please install the extension in the target database and run the migration again."
 
-  # Command out lines that setup timescale
-  sed -i '/CREATE EXTENSION.*timescaledb/s/^/-- /' "$dump_file"
-  sed -i '/COMMENT ON EXTENSION.*timescaledb/s/^/-- /' "$dump_file"
-
-  sed -i '/^COPY.*_timescaledb/,/\\.$/s/\\.$/\\.\n-- ENDCOPY/' "$dump_file"
-  sed -i '/^COPY.*_timescaledb/,/-- ENDCOPY/s/^/-- /' "$dump_file"
-  sed -i '/-- ENDCOPY/d' "$dump_file"
-
-  sed -i '/^SELECT.*_timescaledb/,/\\.$/s/\\.$/\\.\n-- ENDSELECT/' "$dump_file"
-  sed -i '/^SELECT.*_timescaledb/,/-- ENDSELECT/s/^/-- /' "$dump_file"
-  sed -i '/-- ENDSELECT/d' "$dump_file"
-
+  ./comment_timescaledb.awk "$dump_file" > "${dump_file}.new"
+  mv "${dump_file}.new" "$dump_file"
 fi
 
 # Restore that data to the new database
 psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
-    -f $dump_file || error_exit "Failed to restore database to $NEW_URL."
+    -f $dump_file > /dev/null || error_exit "Failed to restore database to $NEW_URL."
 
 write_ok "Successfully restored database to NEW_URL"
 
