@@ -102,6 +102,7 @@ pg_dump -d "$PLUGIN_URL" \
   --no-tablespaces \
   --no-owner \
   --no-privileges \
+  --disable-triggers \
   --file=$dump_file || error_exit "Failed to dump database from PLUGIN_URL."
 
 write_ok "Successfully saved dump to $dump_file"
@@ -112,7 +113,38 @@ echo "Dump file size: $dump_file_size"
 section "Restoring database to NEW_URL"
 
 # Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
-psql $NEW_URL -c "DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';"
+# psql $NEW_URL -c "DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';"
+
+psql $NEW_URL -c "
+DO \$\$
+BEGIN
+   IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = '_timescaledb_catalog' AND c.relname = 'metadata') THEN
+      DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';
+   END IF;
+END
+\$\$
+"
+
+# Check if TimescaleDB extension exists in the NEW_URL database
+if ! psql $NEW_URL -c '\dx' | grep -q 'timescaledb'; then
+  write_warn "TimescaleDB extension not found in target database. Ignoring TimescaleDB specific commands."
+  write_warn "If you are using TimescaleDB, please install the extension in the target database and run the migration again."
+
+  # Command out lines that setup timescale
+  sed -i '/CREATE EXTENSION.*timescaledb/s/^/-- /' "$dump_file"
+  sed -i '/COMMENT ON EXTENSION.*timescaledb/s/^/-- /' "$dump_file"
+
+  sed -i '/^COPY.*_timescaledb/,/\\.$/s/\\.$/\\.\n-- ENDCOPY/' "$dump_file"
+  sed -i '/^COPY.*_timescaledb/,/-- ENDCOPY/s/^/-- /' "$dump_file"
+  sed -i '/-- ENDCOPY/d' "$dump_file"
+
+  sed -i '/^SELECT.*_timescaledb/,/\\.$/s/\\.$/\\.\n-- ENDSELECT/' "$dump_file"
+  sed -i '/^SELECT.*_timescaledb/,/-- ENDSELECT/s/^/-- /' "$dump_file"
+  sed -i '/-- ENDSELECT/d' "$dump_file"
+
+fi
 
 # Restore that data to the new database
 psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
