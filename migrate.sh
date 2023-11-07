@@ -132,6 +132,8 @@ if ! psql $NEW_URL -c '\dx' | grep -q 'timescaledb'; then
 
   ./comment_timescaledb.awk "$dump_file" > "${dump_file}.new"
   mv "${dump_file}.new" "$dump_file"
+
+  write_ok "Successfully removed TimescaleDB specific commands from dump file"
 fi
 
 # Restore that data to the new database
