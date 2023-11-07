@@ -142,6 +142,8 @@ psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
 
 write_ok "Successfully restored database to NEW_URL"
 
+rm $dump_file
+
 printf "${_RESET}\n"
 printf "${_RESET}\n"
 echo "${_BOLD}${_GREEN}Migration completed successfully${_RESET}"
