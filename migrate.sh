@@ -91,26 +91,6 @@ else
   write_warn "The new database is not empty. Found OVERWRITE_DATABASE environment variable. Proceeding with restore."
 fi
 
-section "Dumping database from PLUGIN_URL" 
-
-# Run pg_dump on the plugin database
-dump_file="plugin_dump.sql"
-
-pg_dump -d "$PLUGIN_URL" \
-  --format=plain \
-  --quote-all-identifiers \
-  --no-tablespaces \
-  --no-owner \
-  --no-privileges \
-  --disable-triggers \
-  --file=$dump_file || error_exit "Failed to dump database from PLUGIN_URL."
-
-write_ok "Successfully saved dump to $dump_file"
-
-dump_file_size=$(ls -lh "$dump_file" | awk '{print $5}')
-echo "Dump file size: $dump_file_size"
-
-section "Restoring database to NEW_URL"
 
 # Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
 psql $NEW_URL -c "
@@ -125,8 +105,49 @@ END
 \$\$
 "
 
-# Check if TimescaleDB extension exists in the NEW_URL database
+PLUGIN_URL_NO_PROTOCOL="${PLUGIN_URL#*://}"
+PLUGIN_USER="${PLUGIN_URL_NO_PROTOCOL%%:*}"
+PLUGIN_PASS="${PLUGIN_URL_NO_PROTOCOL#*:}"
+PLUGIN_PASS="${PLUGIN_PASS%@*}"
+PLUGIN_HOST_PORT_DB="${PLUGIN_URL_NO_PROTOCOL#*@}"
+PLUGIN_HOST="${PLUGIN_HOST_PORT_DB%:*}"
+PLUGIN_PORT_DB="${PLUGIN_HOST_PORT_DB#*:}"
+PLUGIN_PORT="${PLUGIN_PORT_DB%%/*}"
+PLUGIN_DB="${PLUGIN_PORT_DB#*/}"
+
+NEW_URL_NO_PROTOCOL="${NEW_URL#*://}"
+NEW_USER="${NEW_URL_NO_PROTOCOL%%:*}"
+NEW_PASS="${NEW_URL_NO_PROTOCOL#*:}"
+NEW_PASS="${NEW_PASS%@*}"
+NEW_HOST_PORT_DB="${NEW_URL_NO_PROTOCOL#*@}"
+NEW_HOST="${NEW_HOST_PORT_DB%:*}"
+NEW_PORT_DB="${NEW_HOST_PORT_DB#*:}"
+NEW_PORT="${NEW_PORT_DB%%/*}"
+NEW_DB="${NEW_PORT_DB#*/}"
+
+# If TimeScale is not installed, we need to remove all TimeScale specific commands from the dump file
+# To do this we dump to a plain SQL text file and process it with Awk
 if ! psql $NEW_URL -c '\dx' | grep -q 'timescaledb'; then
+
+  section "Dumping database from PLUGIN_URL" 
+
+  dump_file="plugin_dump.sql"
+  pg_dump -d "$PLUGIN_URL" \
+    --format=plain \
+    --quote-all-identifiers \
+    --no-tablespaces \
+    --no-owner \
+    --no-privileges \
+    --disable-triggers \
+    --file=$dump_file || error_exit "Failed to dump database from PLUGIN_URL."
+
+  write_ok "Successfully saved dump to $dump_file"
+
+  dump_file_size=$(ls -lh "$dump_file" | awk '{print $5}')
+  echo "Dump file size: $dump_file_size"
+
+  section "Restoring database to NEW_URL"
+
   write_warn "TimescaleDB extension not found in target database. Ignoring TimescaleDB specific commands."
   write_warn "If you are using TimescaleDB, please install the extension in the target database and run the migration again."
 
@@ -134,15 +155,36 @@ if ! psql $NEW_URL -c '\dx' | grep -q 'timescaledb'; then
   mv "${dump_file}.new" "$dump_file"
 
   write_ok "Successfully removed TimescaleDB specific commands from dump file"
+
+  # Restore that data to the new database
+  psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
+      -f $dump_file > /dev/null || error_exit "Failed to restore database to $NEW_URL."
+
+  write_ok "Successfully restored database to NEW_URL"
+
+  rm $dump_file
+else
+  # If Timescale is installed, we dump with pg_dumpbinary
+  section "Dumping database from PLUGIN_URL" 
+
+  dump_directory="plugin_dump"
+  PGPASSWORD=$PLUGIN_PASS pg_dumpbinary -h $PLUGIN_HOST -p $PLUGIN_PORT -u $PLUGIN_USER -d $PLUGIN_DB $dump_directory || error_exit "Failed to dump database from PLUGIN_URL."
+
+  write_ok "Successfully saved dump to $dump_directory"
+
+  dump_directory_size=$(du -sh $dump_directory)
+  echo "Dump directory size: $dump_directory_size"
+
+  PGPASSWORD=$NEW_PASS pg_restorebinary -h $NEW_HOST -p $NEW_PORT -u $NEW_USER -d $NEW_DB $dump_directory || error_exit "Failed to dump database from PLUGIN_URL."
+
+  write_ok "Successfully restored database to NEW_URL"
+
+  rm -rf $dump_directory
+
 fi
 
-# Restore that data to the new database
-psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
-    -f $dump_file > /dev/null || error_exit "Failed to restore database to $NEW_URL."
 
-write_ok "Successfully restored database to NEW_URL"
 
-rm $dump_file
 
 printf "${_RESET}\n"
 printf "${_RESET}\n"
