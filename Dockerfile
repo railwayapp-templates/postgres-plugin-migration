@@ -8,8 +8,15 @@ RUN apt-get update && \
 
 # Install postgresql-client-16
 RUN apt-get update && \
-    apt-get install -y postgresql-client-16 bash ncurses-bin && \
+    apt-get install -y postgresql-client-16 bash make ncurses-bin libdatetime-perl libdbd-pg-perl git && \
     rm -rf /var/lib/apt/lists/*
+
+# Install pg_dumpbinary
+RUN git clone https://github.com/lzlabs/pg_dumpbinary.git
+RUN cd pg_dumpbinary && \
+    perl Makefile.PL && \
+    make && \
+    make install
 
 WORKDIR /app
 
