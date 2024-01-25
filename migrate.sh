@@ -146,18 +146,6 @@ for db in $databases; do
   dump_database "$db"
 done
 
-# Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
-psql $NEW_URL -c "
-DO \$\$
-BEGIN
-   IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-              WHERE n.nspname = '_timescaledb_catalog' AND c.relname = 'metadata') THEN
-      DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';
-   END IF;
-END
-\$\$
-"
 trap - ERR # Temporary disable error trap to avoid exiting on error
 psql "$NEW_URL" -c '\dx' | grep -q 'timescaledb'
 timescaledb_exists=$?
@@ -167,6 +155,23 @@ if [ $timescaledb_exists -ne 0 ]; then
     write_warn "TimescaleDB extension not found in target database. Ignoring TimescaleDB specific commands."
     write_warn "If you are using TimescaleDB, please install the extension in the target database and run the migration again."
 fi
+
+# Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
+remove_timescale_catalog_metadata() {
+  local db_url=$1
+
+  psql $db_url -c "
+    DO \$\$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = '_timescaledb_catalog' AND c.relname = 'metadata') THEN
+          DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';
+      END IF;
+    END
+    \$\$
+  "
+}
 
 # Create the database in the provided connection string if it doesn't exist
 ensure_database_exists() {
@@ -195,10 +200,11 @@ restore_database() {
     remove_timescale_commands "$db"
   fi
 
-  base_url=$(echo $NEW_URL | sed -E 's/(postgresql:\/\/[^:]+:[^@]+@[^:]+:[0-9]+)\/.*/\1/')
-  db_url="${base_url}/${db}"
+  local base_url=$(echo $NEW_URL | sed -E 's/(postgresql:\/\/[^:]+:[^@]+@[^:]+:[0-9]+)\/.*/\1/')
+  local db_url="${base_url}/${db}"
 
   ensure_database_exists "$db_url"
+  remove_timescale_catalog_metadata "$db_url"
 
   psql $db_url -v ON_ERROR_STOP=1 --echo-errors \
     -f "$dump_dir/$db.sql" > /dev/null || error_exit "Failed to restore database to NEW_URL."
