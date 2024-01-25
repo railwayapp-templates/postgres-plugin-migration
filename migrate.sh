@@ -53,8 +53,6 @@ printf "${_RESET}\n"
 
 section "Validating environment variables"
 
-PLUGIN_PASSWORD=$(echo $PLUGIN_URL | sed -e 's/postgresql:\/\/.*:\(.*\)@.*/\1/')
-
 # Validate that PLUGIN_URL environment variable exists
 if [ -z "$PLUGIN_URL" ]; then
     error_exit "PLUGIN_URL environment variable is not set."
