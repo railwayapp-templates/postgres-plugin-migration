@@ -29,6 +29,10 @@ write_ok() {
   echo "[$_GREEN OK $_RESET] $1"
 }
 
+write_info() {
+  echo "[$_BLUE INFO $_RESET] $1"
+}
+
 write_warn() {
   echo "[$_YELLOW WARN $_RESET] $1"
 }
@@ -91,58 +95,126 @@ else
   write_warn "The new database is not empty. Found OVERWRITE_DATABASE environment variable. Proceeding with restore."
 fi
 
-section "Dumping database from PLUGIN_URL" 
+dump_dir="plugin_dump"
+mkdir -p $dump_dir
 
-# Run pg_dump on the plugin database
-dump_file="plugin_dump.sql"
+dump_database() {
+  local database=$1
+  local dump_file="$dump_dir/$database.sql"
 
-pg_dump -d "$PLUGIN_URL" \
-  --format=plain \
-  --quote-all-identifiers \
-  --no-tablespaces \
-  --no-owner \
-  --no-privileges \
-  --disable-triggers \
-  --file=$dump_file || error_exit "Failed to dump database from PLUGIN_URL."
+  section "Dumping database: $database"
 
-write_ok "Successfully saved dump to $dump_file"
+  local base_url=$(echo $PLUGIN_URL | sed -E 's/(postgresql:\/\/[^:]+:[^@]+@[^:]+:[0-9]+)\/.*/\1/')
+  local db_url="${base_url}/${database}"
 
-dump_file_size=$(ls -lh "$dump_file" | awk '{print $5}')
-echo "Dump file size: $dump_file_size"
+  echo "Dumping database from $db_url"
 
-section "Restoring database to NEW_URL"
+  pg_dump -d "$db_url" \
+      --format=plain \
+      --quote-all-identifiers \
+      --no-tablespaces \
+      --no-owner \
+      --no-privileges \
+      --disable-triggers \
+      --file=$dump_file || error_exit "Failed to dump database from $database."
 
-# Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
-psql $NEW_URL -c "
-DO \$\$
-BEGIN
-   IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-              WHERE n.nspname = '_timescaledb_catalog' AND c.relname = 'metadata') THEN
-      DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';
-   END IF;
-END
-\$\$
-"
+  write_ok "Successfully saved dump to $dump_file"
 
-# Check if TimescaleDB extension exists in the NEW_URL database
-if ! psql $NEW_URL -c '\dx' | grep -q 'timescaledb'; then
-  write_warn "TimescaleDB extension not found in target database. Ignoring TimescaleDB specific commands."
-  write_warn "If you are using TimescaleDB, please install the extension in the target database and run the migration again."
+  dump_file_size=$(ls -lh "$dump_file" | awk '{print $5}')
+  write_info "Dump file size: $dump_file_size"
+}
+
+remove_timescale_commands() {
+  local database=$1
+  local dump_file="$dump_dir/$database.sql"
 
   ./comment_timescaledb.awk "$dump_file" > "${dump_file}.new"
   mv "${dump_file}.new" "$dump_file"
 
-  write_ok "Successfully removed TimescaleDB specific commands from dump file"
+  write_ok "Successfully removed TimescaleDB specific commands from $dump_file"
+}
+
+
+# Get list of databases, excluding system databases
+databases=$(psql -d "$PLUGIN_URL" -t -A -c "SELECT datname FROM pg_database WHERE datistemplate = false;")
+write_info "Found databases to migrate: $databases"
+
+dump_dir="plugin_dump"
+mkdir -p $dump_dir
+
+for db in $databases; do
+  dump_database "$db"
+done
+
+trap - ERR # Temporary disable error trap to avoid exiting on error
+psql "$NEW_URL" -c '\dx' | grep -q 'timescaledb'
+timescaledb_exists=$?
+trap 'echo "An error occurred. Exiting..."; exit 1;' ERR
+
+if [ $timescaledb_exists -ne 0 ]; then
+    write_warn "TimescaleDB extension not found in target database. Ignoring TimescaleDB specific commands."
+    write_warn "If you are using TimescaleDB, please install the extension in the target database and run the migration again."
 fi
 
-# Restore that data to the new database
-psql $NEW_URL -v ON_ERROR_STOP=1 --echo-errors \
-    -f $dump_file > /dev/null || error_exit "Failed to restore database to $NEW_URL."
+# Delete the _timescaledb_catalog.metadata row that contains the exported_uuid to avoid conflicts
+remove_timescale_catalog_metadata() {
+  local db_url=$1
 
-write_ok "Successfully restored database to NEW_URL"
+  psql $db_url -c "
+    DO \$\$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = '_timescaledb_catalog' AND c.relname = 'metadata') THEN
+          DELETE FROM _timescaledb_catalog.metadata WHERE key = 'exported_uuid';
+      END IF;
+    END
+    \$\$
+  "
+}
 
-rm $dump_file
+# Create the database in the provided connection string if it doesn't exist
+ensure_database_exists() {
+  local db_url=$1
+
+  # Extract database name from NEW_URL
+  local db_name=$(echo $db_url | sed -E 's/.*\/([^\/?]+).*/\1/')
+
+  # Extract other components from NEW_URL for psql command
+  local psql_url=$(echo $db_url | sed -E 's/(.*)\/[^\/?]+/\1/')
+
+  # Check if database exists
+  if ! psql $psql_url -tA -c "SELECT 1 FROM pg_database WHERE datname='$db_name'" | grep -q 1; then
+      write_ok "Database $db_name does not exist. Creating..."
+      psql $psql_url -c "CREATE DATABASE \"$db_name\""
+  else
+      write_info "Database $db_name exists."
+  fi
+}
+
+# Restore the database to NEW_URL
+restore_database() {
+  section "Restoring database: $db"
+
+  if [ $timescaledb_exists -ne 0 ]; then
+    remove_timescale_commands "$db"
+  fi
+
+  local base_url=$(echo $NEW_URL | sed -E 's/(postgresql:\/\/[^:]+:[^@]+@[^:]+:[0-9]+)\/.*/\1/')
+  local db_url="${base_url}/${db}"
+
+  ensure_database_exists "$db_url"
+  remove_timescale_catalog_metadata "$db_url"
+
+  psql $db_url -v ON_ERROR_STOP=1 --echo-errors \
+    -f "$dump_dir/$db.sql" > /dev/null || error_exit "Failed to restore database to NEW_URL."
+
+  write_ok "Successfully restored $db to NEW_URL"
+}
+
+for db in $databases; do
+  restore_database "$db"
+done
 
 printf "${_RESET}\n"
 printf "${_RESET}\n"
