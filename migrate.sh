@@ -209,7 +209,7 @@ restore_database() {
   psql $db_url -v ON_ERROR_STOP=1 --echo-errors \
     -f "$dump_dir/$db.sql" > /dev/null || error_exit "Failed to restore database to NEW_URL."
 
-  write_ok "Successfully restored $database to NEW_URL"
+  write_ok "Successfully restored $db to NEW_URL"
 }
 
 for db in $databases; do
